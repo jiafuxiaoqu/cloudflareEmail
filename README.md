@@ -2,6 +2,9 @@
 
 这是一个基于 Cloudflare Workers 和 KV 存储构建的轻量级邮件收件箱。它支持通过 Web 界面输入邮箱地址并实时查看该地址收到的邮件内容。
 
+![Interface Screenshot](https://pbs.twimg.com/media/HJywszWa8AANHCQ?format=jpg&name=medium)
+
+
 ## 功能特性
 
 - **现代 Web 界面**: 提供简洁、响应式的深色模式 UI。
