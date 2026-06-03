@@ -92,7 +92,8 @@ export default {
         const rawText = decodeMimePart(rawSource, "text/plain");
         const rawHtml = decodeMimePart(rawSource, "text/html");
         const text = rawText || decodeTextValue(parsed.text || "");
-        const html = rawHtml || decodeTextValue(parsed.html || "");
+        const parsedHtml = rawHtml || decodeTextValue(parsed.html || "");
+        const html = parsedHtml || (looksLikeHtml(text) ? text : "");
         const subject = decodeMimeHeader(rawSubject || parsed.subject || "") || "(No Subject)";
         const fromName = decodeMimeHeader(parsed.from?.name || getAddressName(rawFrom) || "");
 
@@ -106,7 +107,7 @@ export default {
             body: text,
             html,
             raw: rawSource,
-            snippet: text.slice(0, 200).replace(/\s+/g, ' ').trim() + (text.length > 200 ? "..." : "")
+            snippet: createSnippet(html && looksLikeHtml(text) ? htmlToPlainText(html) : text)
         };
 
         await env.EMAIL_KV.put(`msg:${message.to}:${Date.now()}`, JSON.stringify(emailData));
@@ -126,8 +127,13 @@ function normalizeStoredMessage(message: any): any {
     const rawSubject = rawSource ? getHeader(rawSource, "Subject") : "";
     const rawFrom = rawSource ? getHeader(rawSource, "From") : "";
     const rawText = rawSource ? decodeMimePart(rawSource, "text/plain") || decodeFirstMatchingPart(rawSource, "text/plain") : "";
+    const rawHtml = rawSource ? decodeMimePart(rawSource, "text/html") || decodeFirstMatchingPart(rawSource, "text/html") : "";
     const subject = decodeMimeHeader(rawSubject || message.subject || "") || message.subject || "(No Subject)";
-    const text = rawSource ? rawText : decodeTextValue(message.text || "");
+    const storedText = decodeTextValue(message.text || message.body || "");
+    const text = rawSource ? rawText || storedText : storedText;
+    const storedHtml = decodeTextValue(message.html || "");
+    const html = rawHtml || storedHtml || (looksLikeHtml(text) ? text : "");
+    const snippetSource = html && looksLikeHtml(text) ? htmlToPlainText(html) : text;
     const { raw: _raw, ...safeMessage } = message;
 
     return {
@@ -136,9 +142,38 @@ function normalizeStoredMessage(message: any): any {
         subject,
         text,
         body: text,
-        html: "",
-        snippet: text.slice(0, 200).replace(/\s+/g, " ").trim() + (text.length > 200 ? "..." : "")
+        html,
+        snippet: createSnippet(snippetSource)
     };
+}
+
+function looksLikeHtml(value: unknown): value is string {
+    if (typeof value !== "string") return false;
+    const sample = value.trim();
+    if (!sample) return false;
+
+    return /<!doctype\s+html|<html[\s>]|<body[\s>]/i.test(sample)
+        || /<\/?(?:div|p|br|table|thead|tbody|tr|td|th|a|span|strong|em|ul|ol|li|img|h[1-6]|style)\b[^>]*>/i.test(sample);
+}
+
+function htmlToPlainText(value: string): string {
+    return value
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+        .replace(/<br\b[^>]*>/gi, "\n")
+        .replace(/<\/(?:p|div|tr|li|h[1-6])>/gi, "\n")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&")
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">")
+        .replace(/&quot;/gi, "\"")
+        .replace(/&#39;/g, "'");
+}
+
+function createSnippet(value: string): string {
+    const snippet = value.slice(0, 200).replace(/\s+/g, " ").trim();
+    return snippet + (value.length > 200 ? "..." : "");
 }
 
 function looksLikeRawEmail(value: unknown): value is string {
@@ -561,10 +596,7 @@ const FRONTEND_HTML = `
                                     <div class="detail-value">\${timeStr}</div>
                                 </div>
                             </div>
-                            \${msg.html ? 
-                                \`<div class="badge">可视化内容</div><iframe srcdoc="\${escapeAttr(msg.html)}" style="width:100%; border:none; min-height:500px; background:white; margin-top:15px; border-radius:8px;"></iframe>\` : 
-                                \`<div class="badge">纯文本内容</div><div class="body-text">\${escapeHtml(msg.text || msg.body || '')}</div>\`
-                            }
+                            \${renderMessageBody(msg)}
                         </div>
                     \`;
                     listDiv.appendChild(card);
@@ -593,9 +625,52 @@ const FRONTEND_HTML = `
             });
         }
 
+        function renderMessageBody(msg) {
+            const text = msg.text || msg.body || '';
+            const html = msg.html || (looksLikeHtml(text) ? text : '');
+
+            if (html && looksLikeRichHtml(html)) {
+                return \`<div class="badge">可视化内容</div><iframe srcdoc="\${escapeAttr(html)}" style="width:100%; border:none; min-height:500px; background:white; margin-top:15px; border-radius:8px;"></iframe>\`;
+            }
+
+            return \`<div class="badge">纯文本内容</div><div class="body-text">\${escapeHtml(html ? htmlToPlainText(html) : text)}</div>\`;
+        }
+
+        function looksLikeHtml(str) {
+            if (!str) return false;
+            const sample = String(str).trim();
+            return /<!doctype\\s+html|<html[\\s>]|<body[\\s>]/i.test(sample)
+                || /<\\/?(?:div|p|br|table|thead|tbody|tr|td|th|a|span|strong|em|ul|ol|li|img|h[1-6]|style)\\b[^>]*>/i.test(sample);
+        }
+
+        function looksLikeRichHtml(str) {
+            if (!str) return false;
+            const sample = String(str).trim();
+            return /<!doctype\\s+html|<html[\\s>]|<body[\\s>]|<head[\\s>]|<style[\\s>]|<table[\\s>]|<img[\\s>]/i.test(sample)
+                || /<(?:a|div|span|p|td|th)\\b[^>]*(?:href|style|class|id|src|width|height)=/i.test(sample);
+        }
+
+        function htmlToPlainText(str) {
+            return String(str)
+                .replace(/<script\\b[^>]*>[\\s\\S]*?<\\/script>/gi, ' ')
+                .replace(/<style\\b[^>]*>[\\s\\S]*?<\\/style>/gi, ' ')
+                .replace(/<br\\b[^>]*>/gi, '\\n')
+                .replace(/<\\/(?:p|div|tr|li|h[1-6])>/gi, '\\n')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&nbsp;/gi, ' ')
+                .replace(/&amp;/gi, '&')
+                .replace(/&lt;/gi, '<')
+                .replace(/&gt;/gi, '>')
+                .replace(/&quot;/gi, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/[ \\t]+/g, ' ')
+                .replace(/\\n\\s+/g, '\\n')
+                .trim();
+        }
+
         function escapeAttr(str) {
             if (!str) return '';
-            return str.replace(/"/g, '&quot;');
+            return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
         }
 
         // 页面加加载时恢复邮箱
@@ -661,8 +736,7 @@ const FRONTEND_HTML = `
                                     <div class="detail-value">\${timeStr}</div>
                                 </div>
                             </div>
-                            <div class="badge">纯文本内容</div>
-                            <div class="body-text">\${escapeHtml(msg.text || msg.body || '')}</div>
+                            \${renderMessageBody(msg)}
                         </div>
                     \`;
                     listDiv.appendChild(card);
