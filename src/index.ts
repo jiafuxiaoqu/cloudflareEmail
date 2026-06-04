@@ -38,11 +38,15 @@ export default {
         if (url.pathname === "/api/messages" && request.method === "GET") {
             const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
             const pageSize = Math.min(50, Math.max(1, parseInt(url.searchParams.get("pageSize") || "10", 10) || 10));
+            const emailFilter = (url.searchParams.get("email") || "").trim().toLowerCase();
             const allKeys: any[] = [];
             let cursor: string | undefined;
 
+            // Use prefix filter if email provided for efficiency
+            const listPrefix = emailFilter ? `msg:${emailFilter}:` : "msg:";
+
             do {
-                const list = await env.EMAIL_KV.list({ prefix: "msg:", cursor });
+                const list = await env.EMAIL_KV.list({ prefix: listPrefix, cursor });
                 allKeys.push(...list.keys);
                 cursor = list.list_complete ? undefined : list.cursor;
             } while (cursor);
@@ -515,6 +519,30 @@ const FRONTEND_HTML = `
             font-size: 0.75rem;
             font-weight: 600;
         }
+
+        /* 分页器 */
+        .pager {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            padding: 1rem 0;
+        }
+        .pager button {
+            padding: 0.5rem 1.2rem;
+            font-size: 0.9rem;
+        }
+        .pager button:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+            transform: none;
+        }
+        #pageInfo {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
@@ -525,41 +553,50 @@ const FRONTEND_HTML = `
         </header>
 
         <div class="search-box">
-            <input type="email" id="emailInput" placeholder="输入您的临时邮箱地址..." spellcheck="false">
-            <button onclick="checkInbox()">刷新列表</button>
+            <input type="email" id="emailInput" placeholder="搜索邮箱地址（留空显示全部）..." spellcheck="false" onkeydown="if(event.key==='Enter')loadMessages(1)">
+            <button onclick="loadMessages(1)">搜索</button>
         </div>
 
         <div id="emailList" class="email-list">
-            <div class="empty-state">输入邮箱地址并点击刷新以查看邮件</div>
+            <div class="empty-state">输入邮箱地址搜索，或直接点击搜索查看全部邮件</div>
+        </div>
+
+        <div class="pager" id="pager" style="display:none">
+            <button id="prevBtn" onclick="changePage(-1)" disabled>上一页</button>
+            <span id="pageInfo">第 1 页</span>
+            <button id="nextBtn" onclick="changePage(1)" disabled>下一页</button>
         </div>
     </div>
 
     <script>
-        async function checkInbox() {
-            const email = document.getElementById('emailInput').value.trim();
-            if (!email) {
-                alert('请输入邮箱地址');
-                return;
-            }
+        let currentPage = 1;
+        let totalPages = 1;
+        const pageSize = 10;
 
+        async function loadMessages(page) {
+            page = page || currentPage;
+            const email = document.getElementById('emailInput').value.trim();
             const listDiv = document.getElementById('emailList');
-            listDiv.innerHTML = '<div class="empty-state">正在同步邮件数据...</div>';
+            const pager = document.getElementById('pager');
+            listDiv.innerHTML = '<div class="empty-state">正在加载邮件...</div>';
+            pager.style.display = 'none';
 
             try {
                 // 保存最后使用的邮箱到本地存储
-                localStorage.setItem('last_email', email);
-                
-                await fetch('/api/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email })
-                });
+                if (email) localStorage.setItem('last_email', email);
 
-                const response = await fetch('/api/messages?email=' + encodeURIComponent(email));
-                const messages = await response.json();
+                let apiUrl = '/api/messages?page=' + page + '&pageSize=' + pageSize;
+                if (email) apiUrl += '&email=' + encodeURIComponent(email);
+
+                const response = await fetch(apiUrl);
+                const data = await response.json();
+                const messages = data.messages || [];
+                currentPage = data.page || page;
+                totalPages = data.totalPages || 1;
+                updatePager(data);
 
                 if (messages.length === 0) {
-                    listDiv.innerHTML = '<div class="empty-state">暂无邮件。请确保已正确配置路由并发送测试邮件。</div>';
+                    listDiv.innerHTML = '<div class="empty-state">暂无邮件' + (email ? '（收件人：' + escapeHtml(email) + '）' : '') + '</div>';
                     return;
                 }
 
@@ -567,7 +604,7 @@ const FRONTEND_HTML = `
                 messages.forEach((msg, index) => {
                     const card = document.createElement('div');
                     card.className = 'email-card';
-                    
+
                     const timeStr = new Date(msg.timestamp).toLocaleString('zh-CN', {
                         month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
                     });
@@ -575,17 +612,17 @@ const FRONTEND_HTML = `
                     card.innerHTML = \`
                         <div class="email-header" onclick="toggleEmail(\${index})">
                             <div class="info">
-                                <div class="subject">\${escapeHtml(msg.subject)}</div>
-                                <div class="from">\${escapeHtml(msg.fromName || '')} &lt;\${escapeHtml(msg.from)}&gt;</div>
+                                <div class="subject">\${escapeHtml(msg.subject || '')}</div>
+                                <div class="from">\${escapeHtml(msg.fromName || '')} &lt;\${escapeHtml(msg.from || '')}&gt;</div>
                             </div>
                             <div class="time">\${timeStr}</div>
                         </div>
                         <div id="content-\${index}" class="email-content">
                             <div class="email-detail-header">
-                                <div class="detail-subject">\${escapeHtml(msg.subject)}</div>
+                                <div class="detail-subject">\${escapeHtml(msg.subject || '')}</div>
                                 <div class="detail-row">
                                     <div class="detail-label">发件人：</div>
-                                    <div class="detail-value">\${escapeHtml(msg.fromName || '')} &lt;\${escapeHtml(msg.from)}&gt;</div>
+                                    <div class="detail-value">\${escapeHtml(msg.fromName || '')} &lt;\${escapeHtml(msg.from || '')}&gt;</div>
                                 </div>
                                 <div class="detail-row">
                                     <div class="detail-label">收件人：</div>
@@ -606,16 +643,28 @@ const FRONTEND_HTML = `
             }
         }
 
+        function updatePager(data) {
+            const pager = document.getElementById('pager');
+            const info = document.getElementById('pageInfo');
+            const prev = document.getElementById('prevBtn');
+            const next = document.getElementById('nextBtn');
+            if (info) info.textContent = '第 ' + currentPage + ' / ' + totalPages + ' 页，共 ' + (data.total || 0) + ' 封';
+            if (prev) prev.disabled = !data.hasPrev;
+            if (next) next.disabled = !data.hasNext;
+            if (pager) pager.style.display = (data.total > 0) ? 'flex' : 'none';
+        }
+
+        function changePage(delta) {
+            const nextPage = currentPage + delta;
+            if (nextPage < 1 || nextPage > totalPages) return;
+            loadMessages(nextPage);
+        }
+
         function toggleEmail(index) {
             const content = document.getElementById('content-' + index);
             const isActive = content.classList.contains('active');
-            
-            // 关闭其他
             document.querySelectorAll('.email-content').forEach(el => el.classList.remove('active'));
-            
-            if (!isActive) {
-                content.classList.add('active');
-            }
+            if (!isActive) content.classList.add('active');
         }
 
         function escapeHtml(str) {
@@ -673,104 +722,9 @@ const FRONTEND_HTML = `
             return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
         }
 
-        // 页面加加载时恢复邮箱
         window.onload = () => {
             const last = localStorage.getItem('last_email');
-            if (last) {
-                document.getElementById('emailInput').value = last;
-                checkInbox();
-            }
-        };
-
-        let currentPage = 1;
-        let totalPages = 1;
-        const pageSize = 10;
-
-        async function loadMessages(page = currentPage) {
-            const listDiv = document.getElementById('emailList');
-            listDiv.innerHTML = '<div class="empty-state">正在加载邮件...</div>';
-
-            try {
-                const response = await fetch('/api/messages?page=' + page + '&pageSize=' + pageSize);
-                const data = await response.json();
-                const messages = data.messages || [];
-                currentPage = data.page || page;
-                totalPages = data.totalPages || 1;
-                updatePager(data);
-
-                if (messages.length === 0) {
-                    listDiv.innerHTML = '<div class="empty-state">暂无邮件</div>';
-                    return;
-                }
-
-                listDiv.innerHTML = '';
-                messages.forEach((msg, index) => {
-                    const card = document.createElement('div');
-                    card.className = 'email-card';
-
-                    const timeStr = new Date(msg.timestamp).toLocaleString('zh-CN', {
-                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-                    });
-
-                    card.innerHTML = \`
-                        <div class="email-header" onclick="toggleEmail(\${index})">
-                            <div class="info">
-                                <div class="subject">\${escapeHtml(msg.subject || '')}</div>
-                                <div class="from">\${escapeHtml(msg.fromName || '')} &lt;\${escapeHtml(msg.from || '')}&gt;</div>
-                            </div>
-                            <div class="time">\${timeStr}</div>
-                        </div>
-                        <div id="content-\${index}" class="email-content">
-                            <div class="email-detail-header">
-                                <div class="detail-subject">\${escapeHtml(msg.subject || '')}</div>
-                                <div class="detail-row">
-                                    <div class="detail-label">发件人：</div>
-                                    <div class="detail-value">\${escapeHtml(msg.fromName || '')} &lt;\${escapeHtml(msg.from || '')}&gt;</div>
-                                </div>
-                                <div class="detail-row">
-                                    <div class="detail-label">收件人：</div>
-                                    <div class="detail-value">\${escapeHtml(msg.to || '')}</div>
-                                </div>
-                                <div class="detail-row">
-                                    <div class="detail-label">时间：</div>
-                                    <div class="detail-value">\${timeStr}</div>
-                                </div>
-                            </div>
-                            \${renderMessageBody(msg)}
-                        </div>
-                    \`;
-                    listDiv.appendChild(card);
-                });
-            } catch (e) {
-                listDiv.innerHTML = '<div class="empty-state" style="color: #f87171;">查询失败，请稍后重试</div>';
-            }
-        }
-
-        function setupPager() {
-            const box = document.querySelector('.search-box');
-            if (!box) return;
-            box.innerHTML = '<button onclick="loadMessages(1)">刷新</button><div style="display:flex;align-items:center;gap:.75rem;color:#94a3b8;"><button id="prevBtn" onclick="changePage(-1)">上一页</button><span id="pageInfo">Page 1</span><button id="nextBtn" onclick="changePage(1)">下一页</button></div>';
-            box.style.alignItems = 'center';
-            box.style.justifyContent = 'space-between';
-        }
-
-        function updatePager(data) {
-            const info = document.getElementById('pageInfo');
-            const prev = document.getElementById('prevBtn');
-            const next = document.getElementById('nextBtn');
-            if (info) info.textContent = 'Page ' + currentPage + ' / ' + totalPages + ', total ' + (data.total || 0);
-            if (prev) prev.disabled = !data.hasPrev;
-            if (next) next.disabled = !data.hasNext;
-        }
-
-        function changePage(delta) {
-            const nextPage = currentPage + delta;
-            if (nextPage < 1 || nextPage > totalPages) return;
-            loadMessages(nextPage);
-        }
-
-        window.onload = () => {
-            setupPager();
+            if (last) document.getElementById('emailInput').value = last;
             loadMessages(1);
         };
     </script>
