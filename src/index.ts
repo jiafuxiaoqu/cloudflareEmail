@@ -720,7 +720,7 @@ const FRONTEND_HTML = `
         }
 
         window.onload = () => {
-            // 不再自动搜索，用户需手动输入搜索
+            loadMessages(1);
         };
     </script>
 </body>
