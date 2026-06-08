@@ -582,9 +582,6 @@ const FRONTEND_HTML = `
             pager.style.display = 'none';
 
             try {
-                // 保存最后使用的邮箱到本地存储
-                if (email) localStorage.setItem('last_email', email);
-
                 let apiUrl = '/api/messages?page=' + page + '&pageSize=' + pageSize;
                 if (email) apiUrl += '&email=' + encodeURIComponent(email);
 
@@ -723,9 +720,7 @@ const FRONTEND_HTML = `
         }
 
         window.onload = () => {
-            const last = localStorage.getItem('last_email');
-            if (last) document.getElementById('emailInput').value = last;
-            loadMessages(1);
+            // 不再自动搜索，用户需手动输入搜索
         };
     </script>
 </body>
