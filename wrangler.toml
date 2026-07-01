@@ -5,7 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [[kv_namespaces]]
 binding = "EMAIL_KV"
-id = "5315e0db01d0459fba9f783bc530623d"
+id = "xxxxxxxxxxxxxxxxx"
 
 [observability]
 enabled = true
