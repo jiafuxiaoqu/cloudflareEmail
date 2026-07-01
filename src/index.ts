@@ -4,6 +4,7 @@ import PostalMime from 'postal-mime';
 
 export interface Env {
     EMAIL_KV: KVNamespace;
+    API_BASE_URL?: string;
 }
 
 export default {
@@ -115,8 +116,41 @@ export default {
         };
 
         await env.EMAIL_KV.put(`msg:${message.to}:${Date.now()}`, JSON.stringify(emailData));
+
+        // Forward email to external API
+        ctx.waitUntil(forwardToExternalApi(emailData, env));
     },
 };
+
+async function forwardToExternalApi(emailData: any, env: Env): Promise<void> {
+    const apiBaseUrl = env.API_BASE_URL || "https://baidu.com";
+    const apiUrl = `${apiBaseUrl}/email/email/addEmail`;
+
+    const html = emailData.html || "";
+    const text = emailData.text || emailData.body || "";
+    const mailType = html ? 2 : 1;
+    const content = html || text;
+    const sendTime = new Date(emailData.timestamp).toISOString().slice(0, 10);
+
+    const payload = {
+        mailType,
+        content,
+        sender: emailData.from || "",
+        receiver: emailData.to || "",
+        sendTime,
+    };
+
+    try {
+        await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+    } catch (e) {
+        // Log but don't block email processing on API failure
+        console.error("Failed to forward email to external API:", e);
+    }
+}
 
 function getMessageTimestampFromKey(key: string): number {
     const timestamp = Number(key.slice(key.lastIndexOf(":") + 1));
