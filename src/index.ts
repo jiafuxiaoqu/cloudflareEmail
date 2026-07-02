@@ -130,7 +130,11 @@ async function forwardToExternalApi(emailData: any, env: Env): Promise<void> {
     const text = emailData.text || emailData.body || "";
     const mailType = html ? 2 : 1;
     const content = html || text;
-    const sendTime = new Date(emailData.timestamp).toISOString().slice(0, 10);
+    const d = new Date(emailData.timestamp);
+    // 转换为北京时间 (UTC+8)
+    const bjTime = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const sendTime = `${bjTime.getUTCFullYear()}-${pad(bjTime.getUTCMonth() + 1)}-${pad(bjTime.getUTCDate())} ${pad(bjTime.getUTCHours())}:${pad(bjTime.getUTCMinutes())}:${pad(bjTime.getUTCSeconds())}`;
 
     const payload = {
         mailType,
